@@ -133,7 +133,7 @@ def cmd_install(provider: str) -> int:
     for name in sorted(aliases):
         cmd = aliases[name]
         try:
-            _run_gh(["alias", "set", name, cmd], check=True)
+            _run_gh(["alias", "set", "--clobber", name, cmd], check=True)
         except subprocess.CalledProcessError as exc:
             details = (exc.stderr or "").strip()
             if details:

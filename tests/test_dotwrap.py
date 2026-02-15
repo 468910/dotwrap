@@ -6,9 +6,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import tomllib
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOTWRAP_SRC = REPO_ROOT / "dotwrap.py"
+ALIASES_SRC = REPO_ROOT / "aliases.toml"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -18,6 +21,8 @@ def _write_executable(path: Path, content: str) -> None:
 
 FAKE_GH = r"""#!/usr/bin/env python3
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -30,6 +35,32 @@ Path(log_path).parent.mkdir(parents=True, exist_ok=True)
 with open(log_path, "a", encoding="utf-8") as f:
     f.write("\t".join(sys.argv[1:]) + "\n")
 
+alias_file = os.environ.get("DOTWRAP_GH_ALIAS_FILE")
+
+
+def _load_aliases() -> dict[str, str]:
+    if not alias_file:
+        return {}
+    p = Path(alias_file)
+    if not p.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        name, cmd = line.split("\t", 1)
+        out[name] = cmd
+    return out
+
+
+def _save_aliases(aliases: dict[str, str]) -> None:
+    if not alias_file:
+        return
+    p = Path(alias_file)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"{k}\t{v}" for k, v in sorted(aliases.items())]
+    p.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
 # Expected commands:
 #   gh alias set <name> <command>
 #   gh alias delete <name>
@@ -37,8 +68,8 @@ with open(log_path, "a", encoding="utf-8") as f:
 
 args = sys.argv[1:]
 
-if args[:2] != ["alias", "set"] and args[:2] != ["alias", "delete"] and args[:2] != ["alias", "list"]:
-    print("unexpected args: " + " ".join(args), file=sys.stderr)
+if not args:
+    print("unexpected args", file=sys.stderr)
     sys.exit(2)
 
 if args[:2] == ["alias", "list"]:
@@ -56,7 +87,68 @@ if args[:2] == ["alias", "delete"]:
         sys.stderr.write("no such alias\n")
     sys.exit(rc)
 
-# alias set
+if args[:2] == ["alias", "set"]:
+    # Supports: gh alias set [--clobber] <name> <command>
+    i = 2
+    if len(args) > 2 and args[2] == "--clobber":
+        i += 1
+    if len(args) < i + 2:
+        print("invalid alias set args", file=sys.stderr)
+        sys.exit(2)
+
+    name = args[i]
+    cmd = args[i + 1]
+    aliases = _load_aliases()
+    aliases[name] = cmd
+    _save_aliases(aliases)
+    sys.exit(0)
+
+
+# Minimal gh pr subcommands used by dw_prf.
+if args[:2] == ["pr", "list"]:
+    # Output a tab-delimited list like the real template would.
+    sys.stdout.write("17\talice\tfeat -> main\t2026-02-15T00:00:00Z\tA title\n")
+    sys.stdout.write("42\tbob\tbugfix -> main\t2026-02-14T00:00:00Z\tAnother\n")
+    sys.exit(0)
+
+if args[:2] == ["pr", "view"]:
+    # Support preview and --web open.
+    sys.exit(0)
+
+if args[:2] == ["pr", "checkout"]:
+    sys.exit(0)
+
+
+# Alias invocation: gh <aliasName> [...]
+alias_name = args[0]
+aliases = _load_aliases()
+expansion = aliases.get(alias_name)
+if not expansion:
+    print("unexpected args: " + " ".join(args), file=sys.stderr)
+    sys.exit(2)
+
+if expansion.startswith("!"):
+    # Shell alias: run via sh. (Good enough for our tests.)
+    proc = subprocess.run(expansion[1:], shell=True)
+    sys.exit(proc.returncode)
+
+argv = shlex.split(expansion)
+proc = subprocess.run(argv + args[1:], text=True)
+sys.exit(proc.returncode)
+"""
+
+
+FAKE_FZF = r"""#!/usr/bin/env python3
+import os
+import sys
+
+# Read stdin to behave like a real pipe consumer.
+_ = sys.stdin.read()
+
+out = os.environ.get("DOTWRAP_FZF_OUTPUT", "")
+if out:
+    sys.stdout.write(out)
+
 sys.exit(0)
 """
 
@@ -76,13 +168,16 @@ class DotwrapCLITestCase(unittest.TestCase):
         self.bin_dir.mkdir(parents=True, exist_ok=True)
 
         self.log_file = self.tmpdir / "gh_calls.log"
+        self.alias_file = self.tmpdir / "gh_aliases.tsv"
 
         _write_executable(self.bin_dir / "gh", FAKE_GH)
+        _write_executable(self.bin_dir / "fzf", FAKE_FZF)
 
         # Minimal environment with our fake gh first on PATH.
         self.env = dict(os.environ)
         self.env["PATH"] = str(self.bin_dir) + os.pathsep + self.env.get("PATH", "")
         self.env["DOTWRAP_GH_LOG"] = str(self.log_file)
+        self.env["DOTWRAP_GH_ALIAS_FILE"] = str(self.alias_file)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -121,6 +216,8 @@ dw_a = """
 cmd subcmd   --flag
   --two   value
 """
+
+dw_prf = "!sh -c echo hi"
 '''
         )
 
@@ -128,14 +225,29 @@ cmd subcmd   --flag
         self.assertEqual(proc.returncode, 0, msg=proc.stderr)
 
         calls = self._logged_calls()
-        # Exact, deterministic sequence (sorted keys: dw_a, dw_b)
+        # Exact, deterministic sequence (sorted keys: dw_a, dw_b, dw_prf)
         self.assertEqual(
             calls,
             [
-                ["alias", "set", "dw_a", "cmd subcmd --flag --two value"],
-                ["alias", "set", "dw_b", "pr view --web"],
+                ["alias", "set", "--clobber", "dw_a", "cmd subcmd --flag --two value"],
+                ["alias", "set", "--clobber", "dw_b", "pr view --web"],
+                ["alias", "set", "--clobber", "dw_prf", "!sh -c echo hi"],
             ],
         )
+
+    def test_install_sets_dw_prf_with_clobber(self) -> None:
+        # Keep this focused: just asserts dw_prf is set with --clobber.
+        self._write_aliases(
+            """[providers.gh.aliases]
+
+    dw_prf = "!sh -c echo hi"
+"""
+        )
+
+        proc = self._run("install", "gh")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+        calls = self._logged_calls()
+        self.assertEqual(calls, [["alias", "set", "--clobber", "dw_prf", "!sh -c echo hi"]])
 
 
 class TestUninstall(DotwrapCLITestCase):
@@ -256,3 +368,69 @@ bad = "pr view"
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPrfIntegration(DotwrapCLITestCase):
+    def _write_dw_prf_only_from_repo(self) -> None:
+        with ALIASES_SRC.open("rb") as f:
+            data = tomllib.load(f)
+        prf = data["providers"]["gh"]["aliases"]["dw_prf"]
+        if "'''" in prf:
+            raise AssertionError("dw_prf contains triple single quotes; test writer needs adjustment")
+        self._write_aliases("[providers.gh.aliases]\n\ndw_prf = '''" + prf + "'''\n")
+
+    def test_dw_prf_select_runs_list_then_web(self) -> None:
+        # Install dw_prf into fake gh.
+        self._write_dw_prf_only_from_repo()
+        proc = self._run("install", "gh")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+        # Clear log so we only assert the alias run path.
+        self.log_file.write_text("", encoding="utf-8")
+
+        env = dict(self.env)
+        env["DOTWRAP_FZF_OUTPUT"] = (
+            "enter\n"
+            "17\talice\tfeat -> main\t2026-02-15T00:00:00Z\tA title\n"
+        )
+
+        run = subprocess.run(
+            ["gh", "dw_prf"],
+            cwd=self.workdir,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(run.returncode, 0, msg=run.stderr)
+
+        calls = self._logged_calls()
+        # Must include: gh pr list ... then gh pr view 17 --web
+        self.assertIn(["dw_prf"], calls)
+        self.assertTrue(any(c[:2] == ["pr", "list"] for c in calls), msg=calls)
+        self.assertTrue(any(c[:4] == ["pr", "view", "17", "--web"] for c in calls), msg=calls)
+
+    def test_dw_prf_cancel_exits_0_no_web_or_checkout(self) -> None:
+        self._write_dw_prf_only_from_repo()
+        proc = self._run("install", "gh")
+        self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+
+        self.log_file.write_text("", encoding="utf-8")
+
+        env = dict(self.env)
+        env["DOTWRAP_FZF_OUTPUT"] = ""  # cancel path: no selection
+
+        run = subprocess.run(
+            ["gh", "dw_prf"],
+            cwd=self.workdir,
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(run.returncode, 0, msg=run.stderr)
+        self.assertEqual(run.stdout.strip(), "")
+
+        calls = self._logged_calls()
+        self.assertIn(["dw_prf"], calls)
+        self.assertTrue(any(c[:2] == ["pr", "list"] for c in calls), msg=calls)
+        self.assertFalse(any(c[:2] == ["pr", "checkout"] for c in calls), msg=calls)
+        self.assertFalse(any(c[:2] == ["pr", "view"] and "--web" in c for c in calls), msg=calls)
