@@ -1,0 +1,23 @@
+[providers.gh.aliases]
+
+# List PRs with author + headRefName -> baseRefName + updatedAt + title
+# (Multiline TOML strings are collapsed into a single-line command before install.)
+dw_prs = """
+pr list
+  --limit 50
+  --json author,headRefName,baseRefName,updatedAt,title
+  --template '{{range .}}{{printf "%-16s %s -> %s  %s  %s\n" .author.login .headRefName .baseRefName .updatedAt .title}}{{end}}'
+"""
+
+# Detailed PR view with author + headRefName -> baseRefName + mergeable + reviewDecision + statusCheckRollup + url
+dw_prmeta = """
+pr view
+  --json author,headRefName,baseRefName,mergeable,reviewDecision,statusCheckRollup,url
+  --template '{{printf "Author: %s\nBranch: %s -> %s\nMergeable: %s\nReview: %s\nChecks: %v\nURL: %s\n" .author.login .headRefName .baseRefName .mergeable .reviewDecision .statusCheckRollup.state .url}}'
+"""
+
+# Open PR in browser
+dw_prweb = "pr view --web"
+
+# Checkout PR
+dw_prco = "pr checkout"
