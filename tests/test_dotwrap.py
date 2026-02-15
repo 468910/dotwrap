@@ -389,8 +389,8 @@ class TestPrfIntegration(DotwrapCLITestCase):
         self.log_file.write_text("", encoding="utf-8")
 
         env = dict(self.env)
+        # fzf may or may not emit an explicit key line for enter. Both should work.
         env["DOTWRAP_FZF_OUTPUT"] = (
-            "enter\n"
             "17\talice\tfeat -> main\t2026-02-15T00:00:00Z\tA title\n"
         )
 
