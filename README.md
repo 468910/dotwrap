@@ -10,6 +10,10 @@ Why it exists:
 
 ## Install / usage
 
+Requirements:
+- Python 3.11+
+- `gh` (GitHub CLI)
+
 Install the aliases into `gh` (idempotent):
 
 ```bash
@@ -33,6 +37,9 @@ gh dw_prco 17
 ### `dw_prf` (alpha)
 
 Interactive PR picker powered by `fzf`.
+
+Extra requirement:
+- `fzf`
 
 - `enter` → open selected PR in the browser
 - `ctrl-o` → checkout the selected PR
