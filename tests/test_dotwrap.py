@@ -406,7 +406,14 @@ class TestPrfIntegration(DotwrapCLITestCase):
         calls = self._logged_calls()
         # Must include: gh pr list ... then gh pr view 17 --web
         self.assertIn(["dw_prf"], calls)
-        self.assertTrue(any(c[:2] == ["pr", "list"] for c in calls), msg=calls)
+        pr_list = next((c for c in calls if c[:2] == ["pr", "list"]), None)
+        self.assertIsNotNone(pr_list, msg=calls)
+
+        # Regression guard: template must be a single argv token.
+        idx = pr_list.index("--template")
+        tmpl = pr_list[idx + 1]
+        self.assertIn("->", tmpl)
+        self.assertIn("\\t", tmpl)
         self.assertTrue(any(c[:4] == ["pr", "view", "17", "--web"] for c in calls), msg=calls)
 
     def test_dw_prf_cancel_exits_0_no_web_or_checkout(self) -> None:
