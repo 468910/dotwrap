@@ -30,6 +30,16 @@ gh dw_prweb 17
 gh dw_prco 17
 ```
 
+### `dw_prf` (alpha)
+
+Interactive PR picker powered by `fzf`.
+
+- `enter` → open selected PR in the browser
+- `ctrl-o` → checkout the selected PR
+- `esc` → quit (exit 0)
+
+![dw_prf demo](docs/assets/prf.gif)
+
 ## Config
 
 All config lives in `aliases.toml` next to `dotwrap.py`.

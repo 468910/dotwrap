@@ -21,3 +21,15 @@ dw_prweb = "pr view --web"
 
 # Checkout PR
 dw_prco = "pr checkout"
+
+# Interactive PR picker (fzf). Cancel exits 0.
+dw_prf = '''
+!sh -c '
+command -v gh >/dev/null 2>&1 || { echo "dotwrap: gh not found" >&2; exit 1; };
+command -v fzf >/dev/null 2>&1 || { echo "dotwrap: fzf not found" >&2; exit 1; };
+sel=$(gh pr list --limit 100 --json number,title,author,headRefName,baseRefName,updatedAt --template '"'"'{{range .}}{{printf "%v\t%v\t%v -> %v\t%v\t%v\n" .number .author.login .headRefName .baseRefName .updatedAt .title}}{{end}}'"'"' | fzf --delimiter "\\t" --with-nth=2.. --height 80% --reverse --border --prompt "PR> " --header "enter=open  ctrl-o=checkout  esc=quit" --preview "GH_PAGER=cat PAGER=cat gh pr view {1} --json title,author,headRefName,baseRefName,updatedAt,mergeable,reviewDecision,url --template \"{{printf \\\"Title: %s\\\\nAuthor: %s\\\\nBranch: %s -> %s\\\\nUpdated: %s\\\\nMergeable: %s\\\\nReview: %s\\\\nURL: %s\\\\n\\\" .title .author.login .headRefName .baseRefName .updatedAt .mergeable .reviewDecision .url}}\" 2>&1" --expect=enter,ctrl-o);
+rc=$?;
+[ $rc -ne 0 ] && exit 0;
+printf "%s\\n" "$sel" | { IFS= read -r key || exit 0; IFS= read -r line || exit 0; [ -z "$line" ] && exit 0; num=$(printf "%s" "$line" | cut -f1); if [ "$key" = ctrl-o ]; then gh pr checkout "$num"; else gh pr view "$num" --web; fi; }
+'
+'''
